@@ -76,6 +76,23 @@ interface VerificationRow {
 }
 
 const ACCEPTED = ["image/jpeg", "image/png"];
+function imageContentType(file: File) {
+  if (file.type === "image/jpeg" || file.type === "image/png") return file.type;
+  return /\.png$/i.test(file.name) ? "image/png" : "image/jpeg";
+}
+function errorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) return error.message;
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string" &&
+    error.message
+  ) {
+    return error.message;
+  }
+  return fallback;
+}
 const UPLOAD_STAGES = [
   "received",
   "binary",
@@ -291,6 +308,7 @@ export function DashboardPage() {
         return;
       }
       const dimensions = await readImageDimensions(file);
+      const contentType = imageContentType(file);
 
       // 2. Store the original image privately.
       const safe = file.name.replace(/[^\w.\-()]+/g, "_");
@@ -298,7 +316,7 @@ export function DashboardPage() {
       setUploadStage("upload");
       const { error: upErr } = await supabase.storage
         .from("images")
-        .upload(path, file, file.type ? { contentType: file.type } : undefined);
+        .upload(path, file, { contentType, upsert: false });
       if (upErr) throw upErr;
       setUploadStage("store");
 
@@ -308,7 +326,7 @@ export function DashboardPage() {
         .insert({
           owner: userData.user.id,
           name: file.name,
-          mime_type: file.type || null,
+          mime_type: contentType,
           file_size: file.size,
           storage_path: path,
           sha256: hash,
@@ -317,7 +335,8 @@ export function DashboardPage() {
         .select()
         .single();
       if (insErr) {
-        await supabase.storage.from("images").remove([path]);
+        const { error: cleanupError } = await supabase.storage.from("images").remove([path]);
+        if (cleanupError) console.error("Could not remove the unrecorded image upload.", cleanupError);
         throw insErr;
       }
 
@@ -325,7 +344,7 @@ export function DashboardPage() {
       await queryClient.invalidateQueries({ queryKey: ["images"] });
       toast.success("IMAGE SUCCESSFULLY SEALED");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Upload failed. Please try again.");
+      toast.error(errorMessage(err, "Upload failed. Please try again."));
     } finally {
       setBusy(false);
       setProcessingPreview(null);
@@ -377,9 +396,21 @@ export function DashboardPage() {
         if (!related || related.length < 1000) break;
       }
       await removeStoredImages(paths);
-      const { error } = await supabase.from("images").delete().eq("id", img.id);
+      const { data: deleted, error } = await supabase
+        .from("images")
+        .delete()
+        .eq("id", img.id)
+        .select("id")
+        .maybeSingle();
       if (error) throw error;
+      if (!deleted) throw new Error("The image record was not deleted. Refresh the dashboard and try again.");
       if (justUploaded?.id === img.id) setJustUploaded(null);
+      queryClient.setQueryData<ImageRow[]>(["images"], (current) =>
+        current?.filter((image) => image.id !== img.id),
+      );
+      queryClient.setQueryData<VerificationRow[]>(["verifications"], (current) =>
+        current?.filter((verification) => verification.original_image_id !== img.id),
+      );
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["images"] }),
         queryClient.invalidateQueries({ queryKey: ["verifications"] }),
@@ -387,7 +418,7 @@ export function DashboardPage() {
       ]);
       toast.success("Original image and related verification history deleted.");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not delete this image.");
+      toast.error(errorMessage(err, "Could not delete this image."));
     }
   };
 
@@ -398,8 +429,14 @@ export function DashboardPage() {
         const { error } = await supabase.storage.from("images").remove([row.check_storage_path]);
         if (error) throw error;
       }
-      const { error } = await supabase.from("verifications").delete().eq("id", row.id);
+      const { data: deleted, error } = await supabase
+        .from("verifications")
+        .delete()
+        .eq("id", row.id)
+        .select("id")
+        .maybeSingle();
       if (error) throw error;
+      if (!deleted) throw new Error("The verification record was not deleted. Refresh and try again.");
       await queryClient.invalidateQueries({ queryKey: ["verifications"] });
       toast.success("Verification record deleted.");
     } catch (err) {

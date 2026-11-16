@@ -43,6 +43,27 @@
       "when": 1793855099443,
       "tag": "0005_images_bucket_policies",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794836881000,
+      "tag": "0007_image_integrity_analytics",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794836882000,
+      "tag": "0008_images_bucket_setup",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794836883000,
+      "tag": "0009_owner_update_policies",
+      "breakpoints": true
     }
   ]
 }

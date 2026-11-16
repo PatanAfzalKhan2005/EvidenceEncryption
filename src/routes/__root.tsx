@@ -118,11 +118,6 @@ function RootShell({ children }: { children: ReactNode }) {
     <html lang="en">
       <head>
         <HeadContent />
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `try { if (localStorage.getItem('imageseal-theme') === 'dark') document.documentElement.classList.add('theme-dark') } catch {}`,
-          }}
-        />
       </head>
       <body>
         {children}
@@ -138,6 +133,20 @@ function RootComponent() {
 
   // Keep the router in sync with auth identity transitions (sign-in/out only —
   // token refreshes and initial session events are ignored to avoid churn).
+  useEffect(() => {
+    // Keep the server and first client render identical. Browser storage is
+    // applied only after hydration, instead of mutating <html> from a head
+    // script before React attaches to the server-rendered document.
+    try {
+      document.documentElement.classList.toggle(
+        "theme-dark",
+        localStorage.getItem("imageseal-theme") === "dark",
+      );
+    } catch {
+      document.documentElement.classList.remove("theme-dark");
+    }
+  }, []);
+
   useEffect(() => {
     const { data } = supabase.auth.onAuthStateChange((event) => {
       if (event !== "SIGNED_IN" && event !== "SIGNED_OUT" && event !== "USER_UPDATED") return;

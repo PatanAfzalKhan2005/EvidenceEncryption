@@ -5,8 +5,11 @@ import { supabase } from "@/integrations/supabase/client";
 export const Route = createFileRoute("/_authenticated")({
   ssr: false,
   beforeLoad: async () => {
-    const { data } = await supabase.auth.getUser();
-    if (!data?.user) {
+    // Read the persisted client session. getUser() makes an auth network call
+    // on every route transition and can reject a valid local session while it
+    // is being restored or refreshed.
+    const { data, error } = await supabase.auth.getSession();
+    if (error || !data.session?.user) {
       const next = `${window.location.pathname}${window.location.search}`;
       throw redirect({ to: "/auth", search: { next } });
     }
