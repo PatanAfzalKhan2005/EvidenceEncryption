@@ -4,7 +4,7 @@ import { Eye, EyeOff, AlertCircle, Loader2, ArrowRight, Mail, Lock } from "lucid
 import { toast } from "sonner";
 import AuthSplit from "@/components/fx/AuthSplit";
 import ImageSealLogo from "@/components/fx/ImageSealLogo";
-import { supabase } from "@/integrations/supabase/client";
+import { authenticate, token } from "@/lib/api";
 
 export const Route = createFileRoute("/auth")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -52,11 +52,7 @@ function AuthPage() {
   }, [navigate, next]);
 
   // Continue to the protected page that triggered sign-in.
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) continueAfterAuth();
-    });
-  }, [continueAfterAuth]);
+  useEffect(() => { if (token.get()) continueAfterAuth(); }, [continueAfterAuth]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,40 +64,8 @@ function AuthPage() {
       return setError("Password must be at least 8 characters.");
     setLoading(true);
     try {
-      if (mode === "signup") {
-        const { data, error: signUpError } = await supabase.auth.signUp({
-          email: form.email,
-          password: form.password,
-          options: {
-            emailRedirectTo: `${window.location.origin}/auth${next ? `?next=${encodeURIComponent(next)}` : ""}`,
-          },
-        });
-        if (signUpError) {
-          setError(signUpError.message);
-          return;
-        }
-        if (data.session) {
-          toast.success("Account created.");
-          continueAfterAuth();
-        } else {
-          setNotice("Account created. Check your inbox for a confirmation link, then sign in.");
-          setMode("signin");
-        }
-        return;
-      }
-      const { data, error: authError } = await supabase.auth.signInWithPassword({
-        email: form.email,
-        password: form.password,
-      });
-      if (authError || !data.user) {
-        setError(
-          authError?.message === "Email not confirmed"
-            ? "Please confirm your email first — check your inbox for the confirmation link."
-            : authError?.message || "Authentication failed. Please check your credentials.",
-        );
-        return;
-      }
-      toast.success("Welcome back!");
+      await authenticate(mode === "signup" ? "register" : "login", form.email, form.password);
+      toast.success(mode === "signup" ? "Account created." : "Welcome back!");
       continueAfterAuth();
     } catch (submitError) {
       setError(

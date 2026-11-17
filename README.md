@@ -1,32 +1,38 @@
-# Launchpad Project Workspace
+# ImageSeal
 
-/skill:migrate-external-project Source: code archive. Migrate the attached project into Lovable.
+ImageSeal is the existing React/TanStack application connected to a Java 21, Spring Boot 3.5.3 REST API and MySQL. User passwords use BCrypt; requests use JWT bearer authentication. The API calculates SHA-256 hashes and stores uploaded image bytes in local persistent storage.
 
-This project was built with [Lovable](https://lovable.dev).
+## Start the backend
 
-**Live app**: https://launchpad-project-workspace.lovable.app
+Create the database in MySQL Workbench or in a MySQL command prompt (not directly in PowerShell):
 
-## Build with Lovable
+```sql
+CREATE DATABASE IF NOT EXISTS imageseal;
+```
 
-Continue developing this project in the [Lovable editor](https://lovable.dev/projects/fd5bb354-7408-487c-b02e-e375b5380c75).
+In PowerShell, from `backend`:
 
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: every change made in Lovable is committed straight to this repository.
-- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
+```powershell
+$env:DB_URL = "jdbc:mysql://localhost:3306/imageseal"
+$env:DB_USERNAME = "root"
+$env:DB_PASSWORD = "your-actual-mysql-password"
+$env:JWT_SECRET = "generate-a-random-secret-of-at-least-32-characters"
+$env:IMAGE_ENCRYPTION_KEY = "your-stable-base64-encoded-32-byte-key"
+$env:IMAGE_STORAGE_DIR = "../storage/images"
+mvn spring-boot:run
+```
 
-## Development
+## Start the frontend
 
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
+From the repository root, in a second terminal:
 
-```sh
-git clone <this-repository-url>
-cd <repository-name>
-npm i
+```powershell
+npm install
 npm run dev
 ```
 
-Before starting locally, copy `.env.example` to `.env` and fill in your Supabase project URL, project ID, and publishable key. Keep `.env` private; it is not included in the release ZIP.
+The React API base URL defaults to `http://localhost:8081/api`; override it with `VITE_API_URL` if needed. Copy `.env.example` to `.env` only if you want to override that URL. No database passwords or JWT secrets belong in frontend environment variables.
 
-## ImageSeal integrity workflow
+Hibernate creates/updates `users`, `images`, `verifications`, `image_versions`, `duplicate_uploads`, and `audit_logs` in MySQL on backend startup. MySQL is the only application database; old cloud database clients and project configuration are removed.
 
-ImageSeal computes SHA-256 in the browser from the exact image file that is stored. A matching digest means the file bytes match exactly. The visual comparison and pixel heatmap are approximate review aids and do not replace the hash result. Images remain in the private Supabase `images` bucket and are accessed through signed URLs.
+Run frontend checks with `npm test` and `npm run build`. Build the backend from `backend` with `mvn package`.

@@ -1,4 +1,4 @@
-import { Fingerprint, Lock, ScanLine } from "lucide-react";
+import { Fingerprint, Lock, ScanLine, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 import ImageSealLogo from "@/components/fx/ImageSealLogo";
 import AuthIllustration from "@/components/fx/AuthIllustration";
@@ -20,12 +20,17 @@ export default function AuthSplit({ children }: { children: ReactNode }) {
           <span>ImageSeal</span>
         </div>
         <div className="sg-hero-copy">
+          <span className="sg-eyebrow">
+            <ShieldCheck size={15} /> PRIVATE IMAGE INTEGRITY
+          </span>
           <h1>
-            Prove every image
+            Know your image
             <br />
             is <em>still the original.</em>
           </h1>
-          <p>Seal an image once, then check any copy against it with a cryptographic fingerprint.</p>
+          <p>
+            Seal it once. Verify every copy with a precise SHA-256 fingerprint and a clear result.
+          </p>
         </div>
         <AuthIllustration />
         <ul className="sg-points">

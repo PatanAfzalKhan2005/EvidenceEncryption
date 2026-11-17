@@ -1,0 +1,5 @@
+com\imageseal\service\ImageValidationServiceTest.class
+com\imageseal\service\ImageStorageServiceTest.class
+com\imageseal\service\Sha256ServiceTest.class
+com\imageseal\security\JwtServiceTest.class
+com\imageseal\config\ApiAccessTest.class

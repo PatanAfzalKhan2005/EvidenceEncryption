@@ -3,13 +3,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { BadgeCheck, Trash2, XCircle, History as HistoryIcon, Trash, Download } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { api, apiFile } from "@/lib/api";
 import AppHeader from "@/components/fx/AppHeader";
 import { ImageThumb } from "@/components/fx/ImageThumb";
 import { EmptyState } from "@/components/fx/ui";
 import { HashText, countDiff } from "@/components/fx/HashText";
 import { fmtTs } from "@/lib/fx/format";
-import { removeStoredImages } from "@/lib/fx/storage";
 import { downloadBlob } from "@/lib/fx/images";
 
 export const Route = createFileRoute("/_authenticated/history")({ component: HistoryPage });
@@ -33,91 +32,22 @@ function HistoryPage() {
   const queryClient = useQueryClient();
   const historyQ = useQuery({
     queryKey: ["verifications"],
-    queryFn: async () => {
-      const rows: HistoryRow[] = [];
-      for (let page = 0; ; page += 1) {
-        const { data, error } = await supabase
-          .from("verifications")
-          .select("*")
-          .order("created_at", { ascending: false })
-          .range(page * 1000, page * 1000 + 999);
-        if (error) throw error;
-        rows.push(...((data ?? []) as HistoryRow[]));
-        if (!data || data.length < 1000) return rows;
-      }
-    },
+    queryFn: () => api<HistoryRow[]>("/verifications"),
   });
   const imagesQ = useQuery({
     queryKey: ["images"],
-    queryFn: async () => {
-      const rows: { id: string; storage_path: string }[] = [];
-      for (let page = 0; ; page += 1) {
-        const { data, error } = await supabase
-          .from("images")
-          .select("id,storage_path")
-          .range(page * 1000, page * 1000 + 999);
-        if (error) throw error;
-        rows.push(...(data ?? []));
-        if (!data || data.length < 1000) return rows;
-      }
-    },
+    queryFn: () => api<Array<{id:string;storage_path:string}>>("/images"),
   });
   const imagePaths = useMemo(
     () => new Map((imagesQ.data ?? []).map((image) => [image.id, image.storage_path])),
     [imagesQ.data],
   );
   const rows = historyQ.data ?? [];
-  const downloadPath = async (path: string, name: string) => {
-    try {
-      const { data, error } = await supabase.storage.from("images").download(path);
-      if (error) throw error;
-      downloadBlob(data, name);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Download failed.");
-    }
-  };
+  const downloadPath = async (path: string, name: string) => { try { downloadBlob(await apiFile(`/files/${path}`), name); } catch (error) { toast.error(error instanceof Error ? error.message : "Download failed."); } };
 
-  const deleteRow = async (row: HistoryRow) => {
-    if (!window.confirm(`Delete verification for “${row.check_name}”?`)) return;
-    try {
-      if (row.check_storage_path) {
-        await removeStoredImages([row.check_storage_path]);
-      }
-      const { error } = await supabase.from("verifications").delete().eq("id", row.id);
-      if (error) throw error;
-      await queryClient.invalidateQueries({ queryKey: ["verifications"] });
-      toast.success("Verification record deleted.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not delete this record.");
-    }
-  };
+  const deleteRow = async (row: HistoryRow) => { if (!window.confirm(`Delete verification for ?${row.check_name}??`)) return; try { await api<void>(`/verifications/${row.id}`, {method:"DELETE"}); await queryClient.invalidateQueries({queryKey:["verifications"]}); toast.success("Verification record deleted."); } catch(error) { toast.error(error instanceof Error ? error.message : "Could not delete this record."); } };
 
-  const clearHistory = async () => {
-    if (!rows.length || !window.confirm("Clear all verification records and uploaded copies?"))
-      return;
-    try {
-      const { data: auth } = await supabase.auth.getUser();
-      if (!auth.user) throw new Error("Please sign in again.");
-      const paths: string[] = [];
-      for (let page = 0; ; page += 1) {
-        const { data, error } = await supabase
-          .from("verifications")
-          .select("check_storage_path")
-          .eq("owner", auth.user.id)
-          .range(page * 1000, page * 1000 + 999);
-        if (error) throw error;
-        paths.push(...(data ?? []).map((row) => row.check_storage_path).filter(Boolean));
-        if (!data || data.length < 1000) break;
-      }
-      await removeStoredImages(paths);
-      const { error } = await supabase.from("verifications").delete().eq("owner", auth.user.id);
-      if (error) throw error;
-      await queryClient.invalidateQueries({ queryKey: ["verifications"] });
-      toast.success("Verification history cleared.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not clear history.");
-    }
-  };
+  const clearHistory = async () => { if (!rows.length || !window.confirm("Clear all verification records and uploaded copies?")) return; try { await api<void>("/verifications", {method:"DELETE"}); await queryClient.invalidateQueries({queryKey:["verifications"]}); toast.success("Verification history cleared."); } catch(error) { toast.error(error instanceof Error ? error.message : "Could not clear history."); } };
 
   return (
     <div className="min-h-screen bg-surface-900">
@@ -187,7 +117,7 @@ function HistoryPage() {
                     <span>
                       Visual similarity:{" "}
                       <strong>
-                        {row.visual_similarity === null
+                        {row.visual_similarity == null
                           ? "Unavailable"
                           : `${row.visual_similarity.toFixed(1)}%`}
                       </strong>
@@ -195,7 +125,7 @@ function HistoryPage() {
                     <span>
                       Pixel difference:{" "}
                       <strong>
-                        {row.difference_percent === null
+                        {row.difference_percent == null
                           ? "Unavailable"
                           : `${row.difference_percent.toFixed(1)}%`}
                       </strong>

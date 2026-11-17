@@ -12,7 +12,7 @@ import {
   Settings,
 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { currentUserEmail, token } from "@/lib/api";
 import ImageSealLogo from "@/components/fx/ImageSealLogo";
 
 const NAV = [
@@ -32,7 +32,7 @@ export default function AppHeader() {
   const [dark, setDark] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? null));
+    setEmail(currentUserEmail());
     const enabled = localStorage.getItem("imageseal-theme") === "dark";
     setDark(enabled);
     document.documentElement.classList.toggle("theme-dark", enabled);
@@ -48,11 +48,8 @@ export default function AppHeader() {
   const handleSignOut = async () => {
     await queryClient.cancelQueries();
     try {
-      const { error } = await supabase.auth.signOut();
-      if (error) {
-        toast.error(error.message);
-        return;
-      }
+      token.clear();
+      localStorage.removeItem("imageseal-user");
       queryClient.clear();
       navigate({ to: "/auth", replace: true });
     } catch (signOutError) {

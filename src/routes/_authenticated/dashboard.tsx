@@ -19,7 +19,7 @@ import {
   Eye,
 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { api, apiFile } from "@/lib/api";
 import AppHeader from "@/components/fx/AppHeader";
 import { ImageThumb } from "@/components/fx/ImageThumb";
 import { HashText, countDiff } from "@/components/fx/HashText";
@@ -62,6 +62,7 @@ interface ImageRow {
   created_at: string;
   width: number | null;
   height: number | null;
+  duplicate?: boolean;
 }
 interface VerificationRow {
   id: string;
@@ -115,33 +116,9 @@ function stageLabel(stage: (typeof UPLOAD_STAGES)[number]) {
   }[stage];
 }
 
-async function fetchImages(): Promise<ImageRow[]> {
-  const rows: ImageRow[] = [];
-  for (let page = 0; ; page += 1) {
-    const { data, error } = await supabase
-      .from("images")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .range(page * 1000, page * 1000 + 999);
-    if (error) throw error;
-    rows.push(...((data ?? []) as ImageRow[]));
-    if (!data || data.length < 1000) return rows;
-  }
-}
+async function fetchImages(): Promise<ImageRow[]> { return api<ImageRow[]>("/images"); }
 
-async function fetchVerifications(): Promise<VerificationRow[]> {
-  const rows: VerificationRow[] = [];
-  for (let page = 0; ; page += 1) {
-    const { data, error } = await supabase
-      .from("verifications")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .range(page * 1000, page * 1000 + 999);
-    if (error) throw error;
-    rows.push(...((data ?? []) as VerificationRow[]));
-    if (!data || data.length < 1000) return rows;
-  }
-}
+async function fetchVerifications(): Promise<VerificationRow[]> { return api<VerificationRow[]>("/verifications"); }
 
 export function DashboardPage() {
   const navigate = useNavigate();
@@ -150,21 +127,7 @@ export function DashboardPage() {
 
   const imagesQ = useQuery({ queryKey: ["images"], queryFn: fetchImages });
   const verificationsQ = useQuery({ queryKey: ["verifications"], queryFn: fetchVerifications });
-  const duplicatesQ = useQuery({
-    queryKey: ["duplicate-uploads"],
-    queryFn: async () => {
-      const rows: { id: string }[] = [];
-      for (let page = 0; ; page += 1) {
-        const { data, error } = await supabase
-          .from("duplicate_uploads")
-          .select("id")
-          .range(page * 1000, page * 1000 + 999);
-        if (error) throw error;
-        rows.push(...(data ?? []));
-        if (!data || data.length < 1000) return rows;
-      }
-    },
-  });
+  const duplicatesQ = useQuery({ queryKey: ["duplicate-uploads"], queryFn: () => api<Array<{id:string}>>("/duplicates") });
 
   const [justUploaded, setJustUploaded] = useState<ImageRow | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -250,8 +213,8 @@ export function DashboardPage() {
       toast.error("Only JPG, JPEG and PNG images are supported.");
       return;
     }
-    if (file.size > 25 * 1024 * 1024) {
-      toast.error("Images up to 25 MB are supported.");
+    if (file.size > 15 * 1024 * 1024) {
+      toast.error("Images up to 15 MB are supported.");
       return;
     }
     setBusy(true);
@@ -262,87 +225,15 @@ export function DashboardPage() {
       // Stages are emitted by the actual file read and Web Crypto operations.
       const hash = await computeSHA256(file, (stage) => setUploadStage(stage));
       setUploadHash(hash);
-      const { data: userData } = await supabase.auth.getUser();
-      if (!userData.user) throw new Error("You are signed out. Please sign in again.");
-
-      const { data: duplicate, error: duplicateError } = await supabase
-        .from("images")
-        .select("*")
-        .eq("sha256", hash)
-        .maybeSingle();
-      if (duplicateError) throw duplicateError;
-      let existing = duplicate;
-      if (!existing) {
-        const { data: versionDuplicate, error: versionError } = await supabase
-          .from("image_versions")
-          .select("original_image_id")
-          .eq("sha256", hash)
-          .maybeSingle();
-        if (versionError) throw versionError;
-        if (versionDuplicate) {
-          const { data: parent, error: parentError } = await supabase
-            .from("images")
-            .select("*")
-            .eq("id", versionDuplicate.original_image_id)
-            .maybeSingle();
-          if (parentError) throw parentError;
-          existing = parent;
-        }
-      }
-      if (existing) {
-        const { error } = await supabase.from("duplicate_uploads").insert({
-          owner: userData.user.id,
-          existing_image_id: existing.id,
-          upload_name: file.name,
-          sha256: hash,
-        });
-        if (error) throw error;
-        setJustUploaded(existing as ImageRow);
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ["duplicate-uploads"] }),
-          queryClient.invalidateQueries({ queryKey: ["images"] }),
-        ]);
-        toast.info(
-          `Duplicate Image Detected. The existing original was uploaded ${fmtTs(existing.created_at)}.`,
-        );
-        return;
-      }
       const dimensions = await readImageDimensions(file);
-      const contentType = imageContentType(file);
-
-      // 2. Store the original image privately.
-      const safe = file.name.replace(/[^\w.\-()]+/g, "_");
-      const path = `${userData.user.id}/${crypto.randomUUID()}_${safe}`;
       setUploadStage("upload");
-      const { error: upErr } = await supabase.storage
-        .from("images")
-        .upload(path, file, { contentType, upsert: false });
-      if (upErr) throw upErr;
+      const form = new FormData(); form.append("file", file);
+      const row = await api<ImageRow>("/images", { method: "POST", body: form });
       setUploadStage("store");
-
-      // 3. Record it with its hash and upload time.
-      const { data: row, error: insErr } = await supabase
-        .from("images")
-        .insert({
-          owner: userData.user.id,
-          name: file.name,
-          mime_type: contentType,
-          file_size: file.size,
-          storage_path: path,
-          sha256: hash,
-          ...dimensions,
-        })
-        .select()
-        .single();
-      if (insErr) {
-        const { error: cleanupError } = await supabase.storage.from("images").remove([path]);
-        if (cleanupError) console.error("Could not remove the unrecorded image upload.", cleanupError);
-        throw insErr;
-      }
-
-      setJustUploaded(row as ImageRow);
-      await queryClient.invalidateQueries({ queryKey: ["images"] });
-      toast.success("IMAGE SUCCESSFULLY SEALED");
+      setJustUploaded({ ...row, ...dimensions });
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ["images"] }), queryClient.invalidateQueries({ queryKey: ["duplicate-uploads"] })]);
+      if (row.duplicate) toast.info("Duplicate Image Detected. The original is already stored.");
+      else toast.success("IMAGE SUCCESSFULLY SEALED");
     } catch (err) {
       toast.error(errorMessage(err, "Upload failed. Please try again."));
     } finally {
@@ -362,109 +253,33 @@ export function DashboardPage() {
 
   const downloadOriginal = async (image: ImageRow) => {
     try {
-      const { data, error } = await supabase.storage.from("images").download(image.storage_path);
-      if (error) throw error;
-      downloadBlob(data, image.name);
+      const blob = await apiFile(`/images/${image.id}/file`);
+      downloadBlob(blob, image.name);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not download this image.");
     }
   };
 
   const deleteImage = async (img: ImageRow) => {
-    if (
-      !window.confirm(
-        `Delete “${img.name}” and its verification history? This also removes its stored image files.`,
-      )
-    )
-      return;
+    if (!window.confirm(`Delete ?${img.name}? and its verification history? This also removes its stored image files.`)) return;
     try {
-      const paths = [img.storage_path];
-      const { data: versions, error: versionsError } = await supabase
-        .from("image_versions")
-        .select("storage_path")
-        .eq("original_image_id", img.id);
-      if (versionsError) throw versionsError;
-      paths.push(...(versions ?? []).map((version) => version.storage_path));
-      for (let page = 0; ; page += 1) {
-        const { data: related, error: lookupError } = await supabase
-          .from("verifications")
-          .select("check_storage_path")
-          .eq("original_image_id", img.id)
-          .range(page * 1000, page * 1000 + 999);
-        if (lookupError) throw lookupError;
-        paths.push(...(related ?? []).map((row) => row.check_storage_path).filter(Boolean));
-        if (!related || related.length < 1000) break;
-      }
-      await removeStoredImages(paths);
-      const { data: deleted, error } = await supabase
-        .from("images")
-        .delete()
-        .eq("id", img.id)
-        .select("id")
-        .maybeSingle();
-      if (error) throw error;
-      if (!deleted) throw new Error("The image record was not deleted. Refresh the dashboard and try again.");
+      await api<void>(`/images/${img.id}`, { method: "DELETE" });
       if (justUploaded?.id === img.id) setJustUploaded(null);
-      queryClient.setQueryData<ImageRow[]>(["images"], (current) =>
-        current?.filter((image) => image.id !== img.id),
-      );
-      queryClient.setQueryData<VerificationRow[]>(["verifications"], (current) =>
-        current?.filter((verification) => verification.original_image_id !== img.id),
-      );
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["images"] }),
-        queryClient.invalidateQueries({ queryKey: ["verifications"] }),
-        queryClient.invalidateQueries({ queryKey: ["duplicate-uploads"] }),
-      ]);
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ["images"] }), queryClient.invalidateQueries({ queryKey: ["verifications"] })]);
       toast.success("Original image and related verification history deleted.");
-    } catch (err) {
-      toast.error(errorMessage(err, "Could not delete this image."));
-    }
+    } catch (err) { toast.error(errorMessage(err, "Could not delete this image.")); }
   };
 
   const deleteVerification = async (row: VerificationRow) => {
-    if (!window.confirm(`Delete the verification record for “${row.check_name}”?`)) return;
-    try {
-      if (row.check_storage_path) {
-        const { error } = await supabase.storage.from("images").remove([row.check_storage_path]);
-        if (error) throw error;
-      }
-      const { data: deleted, error } = await supabase
-        .from("verifications")
-        .delete()
-        .eq("id", row.id)
-        .select("id")
-        .maybeSingle();
-      if (error) throw error;
-      if (!deleted) throw new Error("The verification record was not deleted. Refresh and try again.");
-      await queryClient.invalidateQueries({ queryKey: ["verifications"] });
-      toast.success("Verification record deleted.");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not delete this verification.");
-    }
+    if (!window.confirm(`Delete the verification record for ?${row.check_name}??`)) return;
+    try { await api<void>(`/verifications/${row.id}`, { method: "DELETE" }); await queryClient.invalidateQueries({ queryKey: ["verifications"] }); toast.success("Verification record deleted."); }
+    catch (err) { toast.error(errorMessage(err, "Could not delete this verification.")); }
   };
 
   const clearHistory = async () => {
-    if (
-      !verifications.length ||
-      !window.confirm(`Clear all ${verifications.length} verification records and uploaded copies?`)
-    )
-      return;
-    try {
-      const { data: auth } = await supabase.auth.getUser();
-      if (!auth.user) throw new Error("Please sign in again.");
-      const paths = verifications.map((v) => v.check_storage_path).filter(Boolean);
-      if (paths.length) {
-        const { error } = await supabase.storage.from("images").remove(paths);
-        if (error) throw error;
-      }
-      const { error } = await supabase.from("verifications").delete().eq("owner", auth.user.id);
-      if (error) throw error;
-      await queryClient.invalidateQueries({ queryKey: ["verifications"] });
-      toast.success("Verification history cleared.");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not clear history.");
-    }
+    if (!verifications.length || !window.confirm(`Clear all ${verifications.length} verification records and uploaded copies?`)) return;
+    try { await api<void>("/verifications", { method: "DELETE" }); await queryClient.invalidateQueries({ queryKey: ["verifications"] }); toast.success("Verification history cleared."); }
+    catch (err) { toast.error(errorMessage(err, "Could not clear history.")); }
   };
 
   return (
@@ -573,7 +388,7 @@ export function DashboardPage() {
                 Drag & drop an image here, or click to browse
               </p>
               <p className="text-2xs text-slate-600">
-                JPG, JPEG or PNG · up to 25 MB · SHA-256 generated automatically on upload
+                JPG, JPEG or PNG · up to 15 MB · SHA-256 generated automatically on upload
               </p>
             </div>
           )}

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { apiFile } from "@/lib/api";
 
 /** Signed URL for a privately-stored image (cached for the hour it is valid). */
 export function useImageUrl(path: string | null | undefined) {
@@ -9,19 +9,17 @@ export function useImageUrl(path: string | null | undefined) {
     staleTime: 50 * 60 * 1000,
     gcTime: 60 * 60 * 1000,
     queryFn: async () => {
-      const { data, error } = await supabase.storage.from("images").createSignedUrl(path!, 3600);
-      if (error) throw error;
-      return data.signedUrl;
+      return URL.createObjectURL(await apiFile(`/files/${path}`));
     },
   });
 }
 
 export function ImageThumb({ path, className, alt }: { path: string; className?: string; alt?: string }) {
-  const { data: url, isLoading, isError } = useImageUrl(path);
+  const { data: url, isLoading, isError, error } = useImageUrl(path);
   if (isLoading) return <div className={`skeleton ${className ?? ""}`} />;
   if (isError || !url)
     return (
-      <div className={`${className ?? ""} flex items-center justify-center bg-surface-700/60 text-slate-600 text-2xs`}>
+      <div title={error instanceof Error ? error.message : "Unable to retrieve image."} className={`${className ?? ""} flex items-center justify-center bg-surface-700/60 text-slate-600 text-2xs`}>
         Unavailable
       </div>
     );

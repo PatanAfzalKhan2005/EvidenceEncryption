@@ -40,8 +40,8 @@ function SettingsPage() {
             <div>
               <h2 className="card-title">Exact SHA-256 verification</h2>
               <p className="text-sm text-slate-500 mt-1">
-                ImageSeal hashes the exact uploaded file using Web Crypto SHA-256. A match means
-                byte-for-byte identical content. Hashing is not encryption.
+                Spring Boot calculates SHA-256 from each received file and compares it with the
+                stored original. Stored image files are encrypted with AES-GCM at rest.
               </p>
             </div>
           </div>
@@ -52,8 +52,8 @@ function SettingsPage() {
             <div>
               <h2 className="card-title">Private image storage</h2>
               <p className="text-sm text-slate-500 mt-1">
-                Images are kept in the existing private storage bucket. Access is scoped to your
-                signed-in account and served through temporary signed links.
+                Images are kept in persistent backend storage. Access is scoped to your signed-in
+                account and served through authenticated Java API requests.
               </p>
             </div>
           </div>

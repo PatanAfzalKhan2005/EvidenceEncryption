@@ -12,7 +12,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
+import { api, apiFile } from "@/lib/api";
 import AppHeader from "@/components/fx/AppHeader";
 import { ImageThumb } from "@/components/fx/ImageThumb";
 import { EmptyState } from "@/components/fx/ui";
@@ -65,23 +65,12 @@ interface ImageRow {
 }
 
 const ACCEPTED = ["image/jpeg", "image/png"];
-const OPTIONAL_SCHEMA_CODES = new Set(["42703", "PGRST204"]);
 const VERIFY_STEPS = [
-  "Reading and hashing image",
-  "Checking your session",
-  "Comparing with the original",
-  "Uploading the copy",
-  "Recording the result",
+  "Generating uploaded image SHA-256",
+  "Retrieving and validating the original",
+  "Comparing image fingerprints",
+  "Uploading the copy and saving the result",
 ] as const;
-
-function isOptionalVerificationColumnError(error: { code?: string; message?: string }) {
-  return (
-    OPTIONAL_SCHEMA_CODES.has(error.code ?? "") &&
-    /visual_similarity|difference_percent|analysis_summary|original_width|original_height|check_width|check_height/i.test(
-      error.message ?? "",
-    )
-  );
-}
 
 function verificationErrorMessage(error: unknown) {
   const detail =
@@ -92,15 +81,8 @@ function verificationErrorMessage(error: unknown) {
         : String(error ?? "");
   const normalized = detail.toLowerCase();
 
-  if (normalized.includes("bucket not found") || normalized.includes("bucket_id")) {
-    return "Image storage is not configured. The private 'images' bucket is missing.";
-  }
-  if (
-    normalized.includes("row-level security") ||
-    normalized.includes("permission denied") ||
-    normalized.includes("not authorized")
-  ) {
-    return "ImageSeal could not access or save this image for your account. Check your sign-in and storage permissions.";
+  if (normalized.includes("permission denied") || normalized.includes("not authorized")) {
+    return "ImageSeal could not access or save this image. Sign in again and retry.";
   }
   if (
     normalized.includes("payload too large") ||
@@ -114,20 +96,17 @@ function verificationErrorMessage(error: unknown) {
     normalized.includes("network") ||
     normalized.includes("fetch failed")
   ) {
-    return "ImageSeal could not reach Supabase. Check your connection and configured project URL, then retry.";
+    return "ImageSeal could not reach the Java backend. Check that Spring Boot is running on port 8081.";
   }
   if (normalized.includes("invalid jwt") || normalized.includes("jwt expired")) {
     return "Your sign-in session has expired. Sign in again and retry the verification.";
-  }
-  if (normalized.includes("does not exist") && normalized.includes("verifications")) {
-    return "The verification database table is missing. Apply the ImageSeal database migrations.";
   }
   if (normalized.includes("mime type") || normalized.includes("unsupported format")) {
     return "The selected file format is not supported. Choose a readable JPG or PNG image.";
   }
   return detail
     ? `Image verification could not be completed: ${detail}`
-    : "Image verification failed without an error message. Check the browser console and Supabase project logs.";
+    : "Image verification failed without an error message. Check the browser console and Java backend logs.";
 }
 
 function VerifyPage() {
@@ -137,14 +116,7 @@ function VerifyPage() {
 
   const imagesQ = useQuery({
     queryKey: ["images"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("images")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      return (data ?? []) as ImageRow[];
-    },
+    queryFn: () => api<ImageRow[]>("/images"),
   });
   const images = imagesQ.data ?? [];
   const original = id ? (images.find((i) => i.id === id) ?? null) : null;
@@ -170,9 +142,7 @@ function VerifyPage() {
   // Switching to another original starts a fresh comparison.
   useEffect(() => setCandidate(null), [id]);
 
-  const matched = candidate
-    ? sha256Matches(candidate.hash, candidate.originalHash)
-    : null;
+  const matched = candidate ? sha256Matches(candidate.hash, candidate.originalHash) : null;
 
   const verify = async (file: File | undefined) => {
     if (!file || !original || busy) return;
@@ -181,8 +151,8 @@ function VerifyPage() {
       toast.error("Only JPG, JPEG and PNG images are supported.");
       return;
     }
-    if (file.size > 25 * 1024 * 1024) {
-      toast.error("Images up to 25 MB are supported.");
+    if (file.size > 15 * 1024 * 1024) {
+      toast.error("Images up to 15 MB are supported.");
       return;
     }
     setBusy(true);
@@ -191,107 +161,60 @@ function VerifyPage() {
     const previewUrl = URL.createObjectURL(file);
     setScanPreview({ url: previewUrl, name: file.name });
     try {
-      setVerifyStep(2);
-      const { data: userData, error: authError } = await supabase.auth.getUser();
-      if (authError) throw authError;
-      if (!userData.user) throw new Error("You are signed out. Please sign in again.");
-
-      const { data: originalRecord, error: originalError } = await supabase
-        .from("images")
-        .select("*")
-        .eq("id", original.id)
-        .eq("owner", userData.user.id)
-        .maybeSingle();
-      if (originalError) throw originalError;
-      if (!originalRecord) {
-        throw new Error("The selected original image was not found or is no longer accessible.");
-      }
-
-      setVerifyStep(1);
+      const originalRecord = original;
       const hash = await computeSHA256(file);
       setVerifyHash(hash);
       const dimensions = await readImageDimensions(file).catch(() => {
         throw new Error("The selected file is not a readable JPG or PNG image.");
       });
-
       let visual: VisualAnalysis | null = null;
-      setVerifyStep(3);
-      const { data: originalBlob, error: downloadError } = await supabase.storage
-        .from("images")
-        .download(originalRecord.storage_path);
-      if (downloadError) throw downloadError;
-      if (!sha256Matches(await computeSHA256(originalBlob), originalRecord.sha256)) {
+      setVerifyStep(2);
+      const originalBlob = await apiFile(`/images/${originalRecord.id}/file`);
+      if (!sha256Matches(await computeSHA256(originalBlob), originalRecord.sha256))
         throw new Error(
           "The stored original image no longer matches its saved SHA-256 hash. Verification was stopped.",
         );
-      }
-      const isMatch = sha256Matches(hash, originalRecord.sha256);
+      setVerifyStep(3);
       try {
         visual = await analyzeImageBlobs(originalBlob, file);
       } catch (analysisError) {
         console.warn("Visual similarity analysis unavailable", analysisError);
       }
 
-      const safe = file.name.replace(/[^\w.\-()]+/g, "_");
-      const path = `${userData.user.id}/${crypto.randomUUID()}_${safe}`;
+      const form = new FormData();
+      form.append("file", file);
       setVerifyStep(4);
-      const contentType =
-        file.type || (/\.(?:png)$/i.test(file.name) ? "image/png" : "image/jpeg");
-      const { error: upErr } = await supabase.storage
-        .from("images")
-        .upload(path, file, { contentType, upsert: false });
-      if (upErr) throw upErr;
-
-      setVerifyStep(5);
-      const verificationRecord = {
-        owner: userData.user.id,
-        original_image_id: originalRecord.id,
-        original_name: originalRecord.name,
-        original_sha256: originalRecord.sha256,
-        check_name: file.name,
-        check_mime_type: contentType,
-        check_file_size: file.size,
-        check_storage_path: path,
-        check_sha256: hash,
-        matched: isMatch,
-      };
-      let { data: savedVerification, error: insErr } = await supabase
-        .from("verifications")
-        .insert({
-          ...verificationRecord,
-          original_width: originalRecord.width,
-          original_height: originalRecord.height,
-          visual_similarity: visual?.similarity ?? null,
-          difference_percent: visual?.differencePercent ?? null,
-          analysis_summary: visual?.summary ?? null,
-          check_width: dimensions.width,
-          check_height: dimensions.height,
-        })
-        .select("created_at")
-        .single();
-      if (insErr && isOptionalVerificationColumnError(insErr)) {
-        ({ data: savedVerification, error: insErr } = await supabase
-          .from("verifications")
-          .insert(verificationRecord)
-          .select("created_at")
-          .single());
+      const savedVerification = await api<{
+        check_sha256: string;
+        original_sha256: string;
+        matched: boolean;
+        check_storage_path: string;
+        created_at: string;
+      }>(`/images/${originalRecord.id}/verify`, { method: "POST", body: form });
+      const uploadHashMatchesClient = sha256Matches(savedVerification.check_sha256, hash);
+      const originalHashMatchesClient = sha256Matches(
+        savedVerification.original_sha256,
+        originalRecord.sha256,
+      );
+      const exactMatch = sha256Matches(
+        savedVerification.check_sha256,
+        savedVerification.original_sha256,
+      );
+      if (
+        !uploadHashMatchesClient ||
+        !originalHashMatchesClient ||
+        typeof savedVerification.matched !== "boolean" ||
+        savedVerification.matched !== exactMatch
+      ) {
+        throw new Error(
+          "The backend returned inconsistent SHA-256 verification data. Please try again.",
+        );
       }
-      if (insErr) {
-        const { error: cleanupError } = await supabase.storage.from("images").remove([path]);
-        if (cleanupError) {
-          console.error("Could not remove the failed verification upload.", cleanupError);
-        }
-        throw insErr;
-      }
-      if (!savedVerification) {
-        throw new Error("Supabase did not return the saved verification record.");
-      }
-
       setCandidate({
         name: file.name,
-        hash,
-        originalHash: originalRecord.sha256,
-        path,
+        hash: savedVerification.check_sha256,
+        originalHash: savedVerification.original_sha256,
+        path: savedVerification.check_storage_path,
         size: file.size,
         similarity: visual?.similarity ?? null,
         differencePercent: visual?.differencePercent ?? null,
@@ -300,7 +223,7 @@ function VerifyPage() {
         height: dimensions.height,
       });
       await queryClient.invalidateQueries({ queryKey: ["verifications"] });
-      if (isMatch) toast.success("Verified — hash matched.");
+      if (savedVerification.matched) toast.success("Verified — hash matched.");
       else toast.error("Hash mismatch — the image appears modified.");
     } catch (err) {
       console.error("Image verification failed.", err);
@@ -554,7 +477,7 @@ function VerifyPage() {
                       Upload the image to verify
                     </p>
                     <p className="text-2xs text-slate-600">
-                      Drag & drop or click · JPG, JPEG or PNG · up to 25 MB
+                      Drag & drop or click · JPG, JPEG or PNG · up to 15 MB
                     </p>
                   </div>
                 )}

@@ -1,4 +1,4 @@
-import { Fingerprint, ShieldCheck } from "lucide-react";
+import { Fingerprint, LockKeyhole, ShieldCheck } from "lucide-react";
 
 /** Animated security hero: scanned image, glowing shield and fingerprint scanner. */
 export default function AuthIllustration() {
@@ -32,7 +32,12 @@ export default function AuthIllustration() {
 
       <div className="sg-shield">
         <ShieldCheck size={64} strokeWidth={1.5} />
-        <Fingerprint className="sg-shield-fp" size={26} strokeWidth={1.6} />
+        <LockKeyhole className="sg-shield-lock" size={25} strokeWidth={1.8} />
+      </div>
+
+      <div className="sg-fingerprint" aria-hidden="true">
+        <Fingerprint size={30} strokeWidth={1.7} />
+        <span />
       </div>
 
       <div className="sg-chip c1">

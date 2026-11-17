@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createWorker } from "tesseract.js";
 import { Loader2 } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { apiFile } from "@/lib/api";
 import { analyzeImageBlobs, type VisualAnalysis } from "@/lib/fx/images";
 
 export default function DifferenceHeatmap({
@@ -21,12 +21,10 @@ export default function DifferenceHeatmap({
     const analyze = async () => {
       try {
         const [left, right] = await Promise.all([
-          supabase.storage.from("images").download(originalPath),
-          supabase.storage.from("images").download(candidatePath),
+          apiFile(`/files/${originalPath}`),
+          apiFile(`/files/${candidatePath}`),
         ]);
-        if (left.error) throw left.error;
-        if (right.error) throw right.error;
-        const visual = await analyzeImageBlobs(left.data, right.data);
+        const visual = await analyzeImageBlobs(left, right);
         if (!cancelled) setAnalysis(visual);
         setOcrProgress("Scanning text in the browser…");
         worker = await createWorker("eng", 1, {
@@ -36,8 +34,8 @@ export default function DifferenceHeatmap({
           },
         });
         const [leftText, rightText] = await Promise.all([
-          worker.recognize(left.data),
-          worker.recognize(right.data),
+          worker.recognize(left),
+          worker.recognize(right),
         ]);
         if (!cancelled)
           setOcr({ original: leftText.data.text.trim(), candidate: rightText.data.text.trim() });
